@@ -169,6 +169,11 @@ def get_dashboard_stats() -> Dict[str, Any]:
     }
 
 
+def get_vulnerabilities():
+    """Get all vulnerabilities."""
+    return _vulnerabilities
+
+
 def run_dashboard(host: str = "0.0.0.0", port: int = 8080):
     """Run the dashboard server."""
     uvicorn.run(app, host=host, port=port)
