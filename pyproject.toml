@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-ai-devsecops-framework"
+version = "0.1.0"
+description = "An agentic AI-powered DevSecOps framework for automated security testing"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Eyimofe Orimolade", email = "your.email@example.com"}
+]
+dependencies = [
+    "google-generativeai>=0.3.0",
+    "sqlalchemy>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.6",
+    "jinja2>=3.1.2",
+    "requests>=2.31.0",
+    "semgrep>=1.34.0",
+    "safety>=2.3.5",
+    "pip-audit>=2.6.1",
+    "networkx>=3.1",
+    "torch>=2.0.0",
+    "scikit-learn>=1.3.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "nltk>=3.8.1",
+    "beautifulsoup4>=4.12.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "flake8>=6.1.0",
+    "mypy>=1.5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agents*", "core*", "dashboard*", "evaluation*"]
+namespaces = false
