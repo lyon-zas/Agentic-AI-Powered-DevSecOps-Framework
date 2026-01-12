@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-orange: #d29922;
+            --accent-purple: #a371f7;
+            --border-color: #30363d;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        header h1 {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 1.5rem;
+        }
+        
+        header h1::before {
+            content: "🤖";
+        }
+        
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            background: var(--accent-green);
+            color: var(--bg-primary);
+            font-weight: 600;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        .stat-card h3 {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+        
+        .stat-card.critical .stat-value { color: var(--accent-red); }
+        .stat-card.warning .stat-value { color: var(--accent-orange); }
+        .stat-card.success .stat-value { color: var(--accent-green); }
+        
+        .stat-breakdown {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .stat-breakdown div {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .severity-critical { color: var(--accent-red); }
+        .severity-high { color: var(--accent-orange); }
+        .severity-medium { color: var(--accent-purple); }
+        .severity-low { color: var(--text-secondary); }
+        
+        .section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+        
+        .section-header {
+            padding: 1rem 1.5rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .section-header h2 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        
+        .section-content {
+            padding: 1.5rem;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        th {
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        tr:hover {
+            background: var(--bg-tertiary);
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+        
+        .btn-danger {
+            background: var(--accent-red);
+            color: white;
+        }
+        
+        .tag {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .tag-flaky {
+            background: rgba(210, 153, 34, 0.2);
+            color: var(--accent-orange);
+        }
+        
+        .tag-quarantined {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--accent-red);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        
+        footer {
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI DevSecOps Dashboard</h1>
+            <span class="status-badge">System Online</span>
+        </header>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Pipeline Runs</h3>
+                <div class="stat-value">{{ stats.total_runs }}</div>
+            </div>
+            
+            <div class="stat-card {% if stats.vulnerabilities.by_severity.critical > 0 %}critical{% endif %}">
+                <h3>Vulnerabilities</h3>
+                <div class="stat-value">{{ stats.vulnerabilities.total }}</div>
+                <div class="stat-breakdown">
+                    <div><span class="severity-critical">Critical</span> <span>{{ stats.vulnerabilities.by_severity.critical }}</span></div>
+                    <div><span class="severity-high">High</span> <span>{{ stats.vulnerabilities.by_severity.high }}</span></div>
+                    <div><span class="severity-medium">Medium</span> <span>{{ stats.vulnerabilities.by_severity.medium }}</span></div>
+                    <div><span class="severity-low">Low</span> <span>{{ stats.vulnerabilities.by_severity.low }}</span></div>
+                </div>
+            </div>
+            
+            <div class="stat-card {% if stats.flaky_tests.flaky > 5 %}warning{% endif %}">
+                <h3>Flaky Tests</h3>
+                <div class="stat-value">{{ stats.flaky_tests.flaky }}</div>
+                <div class="stat-breakdown">
+                    <div><span>Tracked</span> <span>{{ stats.flaky_tests.total_tracked }}</span></div>
+                    <div><span>Quarantined</span> <span>{{ stats.flaky_tests.quarantined }}</span></div>
+                </div>
+            </div>
+            
+            <div class="stat-card success">
+                <h3>Test Predictions</h3>
+                <div class="stat-value">{{ stats.test_predictions }}</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h2>🧪 Recent Pipeline Runs</h2>
+                <button class="btn btn-primary" onclick="triggerRun()">Trigger Run</button>
+            </div>
+            <div class="section-content">
+                {% if pipeline_runs %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Run ID</th>
+                            <th>Timestamp</th>
+                            <th>Branch</th>
+                            <th>Trigger</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for run in pipeline_runs %}
+                        <tr>
+                            <td>{{ run.id }}</td>
+                            <td>{{ run.timestamp }}</td>
+                            <td>{{ run.branch }}</td>
+                            <td>{{ run.trigger }}</td>
+                            <td><span class="tag">{{ run.status }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-state">
+                    <div class="empty-state-icon">🚀</div>
+                    <p>No pipeline runs yet. Trigger your first run!</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <footer>
+            <p>Agentic AI DevSecOps Framework • Powered by Google ADK</p>
+            <p>Last updated: {{ stats.last_updated }}</p>
+        </footer>
+    </div>
+    
+    <script>
+        async function triggerRun() {
+            const response = await fetch('/api/pipeline/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trigger: 'manual', branch: 'main' })
+            });
+            if (response.ok) {
+                location.reload();
+            }
+        }
+        
+        // Auto-refresh every 30 seconds
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>

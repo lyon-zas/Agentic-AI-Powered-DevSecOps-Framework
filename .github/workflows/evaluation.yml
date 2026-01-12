@@ -1,0 +1,333 @@
+name: Evaluation Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Dataset to evaluate (webgoat, dvwa, juice-shop, all)'
+        required: true
+        default: 'webgoat'
+        type: choice
+        options:
+          - webgoat
+          - dvwa
+          - juice-shop
+          - owasp-benchmark
+          - all
+      tools:
+        description: 'Tools to run (comma-separated: semgrep,sast_agent,sca_agent)'
+        required: false
+        default: 'semgrep,sast_agent'
+      upload_results:
+        description: 'Upload results as artifacts'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # Step 1: Clone Dataset Repositories
+  setup-datasets:
+    runs-on: ubuntu-latest
+    outputs:
+      dataset_path: ${{ steps.clone.outputs.dataset_path }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Clone WebGoat
+        if: contains(inputs.dataset, 'webgoat') || inputs.dataset == 'all'
+        run: |
+          git clone --depth 1 https://github.com/WebGoat/WebGoat evaluation/datasets/webgoat
+        continue-on-error: true
+      
+      - name: Clone DVWA
+        if: contains(inputs.dataset, 'dvwa') || inputs.dataset == 'all'
+        run: |
+          git clone --depth 1 https://github.com/digininja/DVWA evaluation/datasets/dvwa
+        continue-on-error: true
+      
+      - name: Clone Juice Shop
+        if: contains(inputs.dataset, 'juice-shop') || inputs.dataset == 'all'
+        run: |
+          git clone --depth 1 https://github.com/juice-shop/juice-shop evaluation/datasets/juice-shop
+        continue-on-error: true
+      
+      - name: Clone OWASP Benchmark
+        if: contains(inputs.dataset, 'owasp-benchmark') || inputs.dataset == 'all'
+        run: |
+          git clone --depth 1 https://github.com/OWASP-Benchmark/BenchmarkJava evaluation/datasets/owasp-benchmark
+        continue-on-error: true
+      
+      - name: Set dataset path
+        id: clone
+        run: |
+          echo "dataset_path=evaluation/datasets/${{ inputs.dataset }}" >> $GITHUB_OUTPUT
+      
+      - name: Upload datasets as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datasets
+          path: evaluation/datasets/
+          retention-days: 1
+
+  # Step 2: Run SAST Evaluation
+  evaluate-sast:
+    needs: setup-datasets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download datasets
+        uses: actions/download-artifact@v4
+        with:
+          name: datasets
+          path: evaluation/datasets/
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install semgrep
+      
+      - name: Run Semgrep baseline
+        if: contains(inputs.tools, 'semgrep')
+        run: |
+          echo "Running Semgrep on ${{ inputs.dataset }}..."
+          semgrep scan --config auto --json evaluation/datasets/${{ inputs.dataset }} > evaluation/results/semgrep_${{ inputs.dataset }}.json 2>/dev/null || true
+          echo "Semgrep scan complete"
+      
+      - name: Run SAST Agent
+        if: contains(inputs.tools, 'sast_agent')
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "Running SAST Agent on ${{ inputs.dataset }}..."
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from evaluation.runner import EvaluationRunner
+          
+          runner = EvaluationRunner()
+          dataset_path = 'evaluation/datasets/${{ inputs.dataset }}'
+          
+          # Run evaluation
+          reports = runner.evaluate_dataset(
+              '${{ inputs.dataset }}',
+              tools=['sast_agent'],
+              save_results=True
+          )
+          
+          runner.print_summary()
+          "
+      
+      - name: Upload SAST results
+        if: inputs.upload_results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-results-${{ inputs.dataset }}
+          path: evaluation/results/
+          retention-days: 30
+
+  # Step 3: Run SCA Evaluation
+  evaluate-sca:
+    needs: setup-datasets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download datasets
+        uses: actions/download-artifact@v4
+        with:
+          name: datasets
+          path: evaluation/datasets/
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pip-audit
+      
+      - name: Run Snyk SCA
+        if: contains(inputs.tools, 'sca_agent')
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
+          args: --file=evaluation/datasets/${{ inputs.dataset }}/requirements.txt --json-file-output=evaluation/results/snyk_${{ inputs.dataset }}.json
+        continue-on-error: true
+      
+      - name: Run pip-audit fallback
+        if: contains(inputs.tools, 'sca_agent')
+        run: |
+          if [ -f "evaluation/datasets/${{ inputs.dataset }}/requirements.txt" ]; then
+            pip-audit -r evaluation/datasets/${{ inputs.dataset }}/requirements.txt --format json > evaluation/results/pip_audit_${{ inputs.dataset }}.json || true
+          fi
+        continue-on-error: true
+      
+      - name: Upload SCA results
+        if: inputs.upload_results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-results-${{ inputs.dataset }}
+          path: evaluation/results/
+          retention-days: 30
+
+  # Step 4: Calculate Metrics and Generate Report
+  generate-report:
+    needs: [evaluate-sast, evaluate-sca]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download SAST results
+        uses: actions/download-artifact@v4
+        with:
+          name: sast-results-${{ inputs.dataset }}
+          path: evaluation/results/sast/
+        continue-on-error: true
+      
+      - name: Download SCA results
+        uses: actions/download-artifact@v4
+        with:
+          name: sca-results-${{ inputs.dataset }}
+          path: evaluation/results/sca/
+        continue-on-error: true
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Generate evaluation report
+        run: |
+          python -c "
+          import json
+          import os
+          from pathlib import Path
+          from datetime import datetime
+          
+          # Collect all results
+          results = {
+              'dataset': '${{ inputs.dataset }}',
+              'timestamp': datetime.now().isoformat(),
+              'tools_evaluated': '${{ inputs.tools }}'.split(','),
+              'sast_results': {},
+              'sca_results': {},
+          }
+          
+          # Load SAST results
+          sast_dir = Path('evaluation/results/sast')
+          if sast_dir.exists():
+              for f in sast_dir.glob('*.json'):
+                  with open(f) as fp:
+                      results['sast_results'][f.stem] = json.load(fp)
+          
+          # Load SCA results
+          sca_dir = Path('evaluation/results/sca')
+          if sca_dir.exists():
+              for f in sca_dir.glob('*.json'):
+                  with open(f) as fp:
+                      results['sca_results'][f.stem] = json.load(fp)
+          
+          # Calculate summary metrics
+          from evaluation.metrics import calculate_defect_detection_rate, calculate_generative_metrics
+          
+          # Save combined report
+          report_path = 'evaluation/results/evaluation_report_${{ inputs.dataset }}.json'
+          os.makedirs(os.path.dirname(report_path), exist_ok=True)
+          with open(report_path, 'w') as f:
+              json.dump(results, f, indent=2)
+          
+          print('='*60)
+          print('THESIS EVALUATION REPORT')
+          print('='*60)
+          print(f'Dataset: ${{ inputs.dataset }}')
+          print(f'Timestamp: {results[\"timestamp\"]}')
+          print(f'Tools: {results[\"tools_evaluated\"]}')
+          print(f'SAST Results: {len(results[\"sast_results\"])} files')
+          print(f'SCA Results: {len(results[\"sca_results\"])} files')
+          print('='*60)
+          "
+      
+      - name: Generate Markdown Summary
+        run: |
+          echo "## 📊 Thesis Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dataset:** ${{ inputs.dataset }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tools:** ${{ inputs.tools }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "See attached artifacts for detailed evaluation results." >> $GITHUB_STEP_SUMMARY
+      
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report-${{ inputs.dataset }}
+          path: evaluation/results/
+          retention-days: 90
+
+  # Step 5: Compare with Baseline (Optional)
+  compare-baseline:
+    needs: generate-report
+    runs-on: ubuntu-latest
+    if: inputs.dataset != 'all'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download final report
+        uses: actions/download-artifact@v4
+        with:
+          name: evaluation-report-${{ inputs.dataset }}
+          path: evaluation/results/
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run comparison analysis
+        run: |
+          python -c "
+          import json
+          from pathlib import Path
+          
+          print('='*60)
+          print('BASELINE COMPARISON')
+          print('='*60)
+          
+          # Load results
+          results_dir = Path('evaluation/results')
+          
+          for f in results_dir.glob('*.json'):
+              print(f'\\nFile: {f.name}')
+              with open(f) as fp:
+                  data = json.load(fp)
+                  if isinstance(data, dict):
+                      if 'detection' in data:
+                          print(f'  Precision: {data[\"detection\"].get(\"precision\", \"N/A\")}')
+                          print(f'  Recall: {data[\"detection\"].get(\"recall\", \"N/A\")}')
+                          print(f'  F1 Score: {data[\"detection\"].get(\"f1_score\", \"N/A\")}')
+          
+          print('\\n' + '='*60)
+          print('Analysis complete. See artifacts for full comparison.')
+          print('='*60)
+          "
