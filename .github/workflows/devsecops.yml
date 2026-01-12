@@ -127,7 +127,6 @@ jobs:
         continue-on-error: true
       
       - name: SonarCloud Scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -149,7 +148,6 @@ jobs:
       
       # Snyk Test - Check for vulnerabilities (fails build if found)
       - name: Snyk Test (Check for vulnerabilities)
-        if: ${{ secrets.SNYK_TOKEN != '' }}
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -160,7 +158,7 @@ jobs:
       
       # Snyk Monitor - Upload to Snyk dashboard for continuous monitoring
       - name: Snyk Monitor (Continuous monitoring)
-        if: ${{ secrets.SNYK_TOKEN != '' && github.ref == 'refs/heads/main' }}
+        if: github.ref == 'refs/heads/main'
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -171,7 +169,6 @@ jobs:
       
       # Snyk SARIF output for GitHub Security tab
       - name: Snyk to SARIF
-        if: ${{ secrets.SNYK_TOKEN != '' }}
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -180,20 +177,20 @@ jobs:
         continue-on-error: true
       
       - name: Upload Snyk SARIF to GitHub
-        if: ${{ secrets.SNYK_TOKEN != '' && always() }}
+        if: always()
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: snyk.sarif
         continue-on-error: true
       
-      # Fallback: pip-audit for Python if no Snyk token
+      # Fallback: pip-audit for Python
       - name: Run pip-audit (fallback)
-        if: ${{ secrets.SNYK_TOKEN == '' }}
         run: |
           pip install pip-audit
           pip-audit --format=json --output=pip-audit-results.json || true
           echo "### pip-audit Results" >> $GITHUB_STEP_SUMMARY
           cat pip-audit-results.json | jq -r '.[] | "- \(.name)@\(.version): \(.vulns | length) vulnerabilities"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+        continue-on-error: true
 
 
   # Step 4: Decision Gate
