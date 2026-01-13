@@ -18,8 +18,11 @@ config/.env
 *.swp
 *.swo
 
-# Datasets (cloned by GitHub Actions)
-evaluation/datasets/
+# Datasets (dynamically cloned security datasets - excluded)
+evaluation/datasets/webgoat/
+evaluation/datasets/dvwa/
+evaluation/datasets/juice-shop/
+# Note: evaluation/datasets/idoft/ is INCLUDED (bundled data for flaky test evaluation)
 idoft/
 
 # Build

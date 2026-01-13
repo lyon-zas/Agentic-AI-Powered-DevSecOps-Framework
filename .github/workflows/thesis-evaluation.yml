@@ -52,11 +52,17 @@ jobs:
           pip install -r requirements.txt
           pip install pandas scikit-learn
       
-      - name: Clone iDoFT Dataset
+      - name: Verify iDoFT Dataset
         run: |
-          echo "📦 Cloning iDoFT (International Dataset of Flaky Tests)..."
-          git clone --depth 1 https://github.com/TestingResearchIllinois/idoft.git idoft
-          echo "✅ iDoFT cloned: $(ls -la idoft/ | wc -l) items"
+          echo "📦 Checking bundled iDoFT (International Dataset of Flaky Tests)..."
+          if [ -f "evaluation/datasets/idoft/py-data.csv" ]; then
+            echo "✅ iDoFT Python data found"
+            LINES=$(wc -l < evaluation/datasets/idoft/py-data.csv)
+            echo "   Records: $LINES"
+          else
+            echo "❌ iDoFT data not found - please ensure evaluation/datasets/idoft/py-data.csv is committed"
+            exit 1
+          fi
       
       - name: Run Flaky Test Evaluation
         id: evaluate
@@ -77,19 +83,21 @@ jobs:
           print("🧪 FLAKY TEST INTELLIGENCE EVALUATION")
           print("=" * 60)
           
-          # Load iDoFT data
-          idoft_path = Path("idoft")
+          # Load iDoFT data from bundled location
+          idoft_csv = Path("evaluation/datasets/idoft/py-data.csv")
           
-          # Find Python flaky tests in iDoFT
+          # Load Python flaky tests
           python_tests = []
-          for csv_file in idoft_path.glob("**/*.csv"):
+          if idoft_csv.exists():
               try:
                   import pandas as pd
-                  df = pd.read_csv(csv_file)
-                  if 'Project Name' in df.columns or 'Test Name' in df.columns:
-                      python_tests.extend(df.to_dict('records'))
+                  df = pd.read_csv(idoft_csv)
+                  python_tests = df.to_dict('records')
+                  print(f"✅ Loaded {len(python_tests)} Python flaky test records")
               except Exception as e:
-                  print(f"   Skipping {csv_file}: {e}")
+                  print(f"❌ Error loading iDoFT: {e}")
+          else:
+              print(f"❌ iDoFT data not found at {idoft_csv}")
           
           print(f"\n📊 Loaded {len(python_tests)} test records from iDoFT")
           

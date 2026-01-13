@@ -34,9 +34,10 @@
     "version": "1.147.0",
     "scan_date": "2024-01-13",
     "files_scanned": 49,
-    "total_findings": 6,
+    "total_findings": 10,
+    "note": "10 findings from AI-Powered DevSecOps Pipeline (devsecops.yml)",
     "findings_by_severity": {
-      "ERROR": 6,
+      "ERROR": 10,
       "WARNING": 0,
       "INFO": 0
     },
