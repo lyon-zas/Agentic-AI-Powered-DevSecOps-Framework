@@ -53,6 +53,8 @@ def analyze_vulnerability(vulnerability_report: Dict[str, Any]) -> Dict[str, Any
 def generate_fix_code(
     file_path: str,
     vulnerability: Dict[str, Any],
+    original_code: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Generate secure code fix for a vulnerability.
     

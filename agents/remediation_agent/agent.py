@@ -13,7 +13,7 @@ from .tools import (
 remediation_agent = Agent(
     name="remediation_agent",
     model="gemini-2.0-flash-exp",
-    instructions="""
+    instruction="""
     You are an expert Security Remediation Agent specialized in automatically fixing security vulnerabilities.
     
     Your responsibilities:
