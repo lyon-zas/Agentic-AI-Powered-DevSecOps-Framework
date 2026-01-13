@@ -12,12 +12,30 @@ The Remediation Agent automatically creates GitHub Pull Requests with security f
 
 ## Supported Vulnerability Types
 
-| Vulnerability | Fix Strategy |
-|---------------|--------------|
-| SQL Injection | Parameterized queries |
-| XSS | HTML escaping |
-| Command Injection | Safe subprocess calls |
-| Path Traversal | Path validation |
+The Remediation Agent uses **LLM-powered fix generation** to handle **any vulnerability type** detected by security scanners. It includes optimized templates for common patterns and uses AI reasoning for novel or complex vulnerabilities.
+
+### Common Patterns (Template-Optimized)
+
+| Vulnerability | Fix Strategy | OWASP/CWE |
+|---------------|--------------|-----------|
+| SQL Injection | Parameterized queries | A03:2021, CWE-89 |
+| XSS (Cross-Site Scripting) | HTML escaping & CSP | A03:2021, CWE-79 |
+| Command Injection | Safe subprocess calls with argument lists | A03:2021, CWE-78 |
+| Path Traversal | Path validation & canonicalization | A01:2021, CWE-22 |
+| CSRF | Token validation | A01:2021, CWE-352 |
+| Insecure Deserialization | Safe parsing with type validation | A08:2021, CWE-502 |
+| Hardcoded Secrets | Environment variables & secret managers | A02:2021, CWE-798 |
+| Weak Cryptography | Modern algorithms (AES-256, SHA-256+) | A02:2021, CWE-327 |
+
+### AI-Powered Universal Support
+
+For any other vulnerability type (SSRF, XXE, IDOR, etc.), the agent uses **Gemini 2.0** to:
+- Analyze the vulnerability context
+- Generate secure code fixes following best practices
+- Explain the security rationale
+- Provide testing recommendations
+
+**No vulnerability is unsupported** - the agent adapts to handle security issues across all languages and frameworks.
 
 ## Installation
 

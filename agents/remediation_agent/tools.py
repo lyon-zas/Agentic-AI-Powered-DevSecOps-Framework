@@ -53,12 +53,11 @@ def analyze_vulnerability(vulnerability_report: Dict[str, Any]) -> Dict[str, Any
 def generate_fix_code(
     file_path: str,
     vulnerability: Dict[str, Any],
-    original_code: Optional[str] = None
-) -> Dict[str, Any]:
     """
     Generate secure code fix for a vulnerability.
     
-    This is a template-based approach. For production, you'd use LLM here.
+    Uses template-based fixes for common patterns, with LLM integration for novel vulnerabilities.
+    For production use with ADK agent, the agent's LLM will enhance these fixes contextually.
     
     Args:
         file_path: Path to the vulnerable file
@@ -69,48 +68,85 @@ def generate_fix_code(
         Dictionary with fixed code and explanation
     """
     category = vulnerability.get('category', 'unknown')
-    vuln_id = vulnerability.get('vulnerability_id', '')
+    vuln_id = vulnerability.get('vulnerability_id', '').lower()
+    cwe = vulnerability.get('cwe', [])
     
     # Template-based fixes for common patterns
-    if 'sql' in category.lower() or 'sql-injection' in vuln_id.lower():
+    if 'sql' in category.lower() or 'sql-injection' in vuln_id or 'cwe-89' in str(cwe).lower():
         return {
             "fix_type": "SQL Injection Prevention",
-            "recommendation": "Use parameterized queries instead of string concatenation",
+            "recommendation": "Use parameterized queries or prepared statements instead of string concatenation",
             "code_pattern": "OLD: query = f\"SELECT * FROM users WHERE id = {user_id}\"\nNEW: query = \"SELECT * FROM users WHERE id = ?\"\n     cursor.execute(query, (user_id,))",
-            "explanation": "Parameterized queries prevent SQL injection by treating user input as data, not executable code."
+            "explanation": "Parameterized queries prevent SQL injection by treating user input as data, not executable code. The database driver handles proper escaping automatically."
         }
     
-    elif 'xss' in category.lower() or 'cross-site-scripting' in vuln_id.lower():
+    elif 'xss' in category.lower() or 'cross-site' in vuln_id or 'cwe-79' in str(cwe).lower():
         return {
             "fix_type": "XSS Prevention",
-            "recommendation": "Escape user input before rendering in HTML",
-            "code_pattern": "OLD: innerHTML = user_input\nNEW: innerHTML = escapeHtml(user_input)",
-            "explanation": "Escaping HTML special characters prevents XSS attacks by treating user input as text, not code."
+            "recommendation": "Escape user input before rendering in HTML and implement Content Security Policy",
+            "code_pattern": "OLD: innerHTML = user_input\nNEW: import html\n     innerHTML = html.escape(user_input)\n     # Also add CSP header: Content-Security-Policy: default-src 'self'",
+            "explanation": "Escaping HTML special characters (<, >, &, \", ') prevents XSS attacks by treating user input as text, not executable code. CSP provides defense-in-depth."
         }
     
-    elif 'command' in category.lower() or 'command-injection' in vuln_id.lower():
+    elif 'command' in category.lower() or 'exec' in vuln_id or 'cwe-78' in str(cwe).lower():
         return {
             "fix_type": "Command Injection Prevention",
-            "recommendation": "Use safe subprocess calls with argument lists",
-            "code_pattern": "OLD: os.system(f'ping {host}')\nNEW: subprocess.run(['ping', host], check=True)",
-            "explanation": "Using argument lists prevents command injection by avoiding shell interpretation."
+            "recommendation": "Use safe subprocess calls with argument lists, never shell=True",
+            "code_pattern": "OLD: os.system(f'ping {host}')\nNEW: import subprocess\n     subprocess.run(['ping', '-c', '4', host], check=True, capture_output=True)",
+            "explanation": "Using argument lists (shell=False) prevents command injection by avoiding shell interpretation. Each argument is passed directly to the program without shell expansion."
         }
     
-    elif 'path' in category.lower() or 'traversal' in vuln_id.lower():
+    elif 'path' in category.lower() or 'traversal' in vuln_id or 'cwe-22' in str(cwe).lower():
         return {
             "fix_type": "Path Traversal Prevention",
-            "recommendation": "Validate and sanitize file paths",
-            "code_pattern": "OLD: open(user_path)\nNEW: safe_path = os.path.abspath(user_path)\n     if not safe_path.startswith(ALLOWED_DIR):\n         raise ValueError('Invalid path')\n     open(safe_path)",
-            "explanation": "Path validation prevents directory traversal attacks by ensuring files are within allowed directories."
+            "recommendation": "Validate and canonicalize file paths, use allowlist",
+            "code_pattern": "OLD: open(user_path)\nNEW: import os\n     safe_path = os.path.abspath(os.path.normpath(user_path))\n     if not safe_path.startswith(ALLOWED_DIR):\n         raise ValueError('Access denied')\n     open(safe_path)",
+            "explanation": "Path canonicalization (abspath, normpath) prevents directory traversal by resolving '..' and symlinks. Allowlist checking ensures access only to intended directories."
+        }
+    
+    elif 'csrf' in category.lower() or 'cwe-352' in str(cwe).lower():
+        return {
+            "fix_type": "CSRF Protection",
+            "recommendation": "Implement CSRF tokens for state-changing operations",
+            "code_pattern": "OLD: @app.route('/transfer', methods=['POST'])\n     def transfer(): ...\nNEW: from flask_wtf.csrf import CSRFProtect\n     csrf = CSRFProtect(app)\n     @app.route('/transfer', methods=['POST'])\n     @csrf.csrf_protect\n     def transfer(): ...",
+            "explanation": "CSRF tokens ensure requests originated from your application, not from malicious sites. Each form submission requires a unique, secret token."
+        }
+    
+    elif 'deserial' in category.lower() or 'pickle' in vuln_id or 'cwe-502' in str(cwe).lower():
+        return {
+            "fix_type": "Insecure Deserialization Prevention",
+            "recommendation": "Use safe serialization formats like JSON, avoid pickle with untrusted data",
+            "code_pattern": "OLD: import pickle\n     data = pickle.loads(user_data)\nNEW: import json\n     data = json.loads(user_data)  # Safe, no code execution\n     # Or use schema validation with pydantic/marshmallow",
+            "explanation": "Pickle can execute arbitrary code during deserialization. JSON is data-only and cannot execute code. Use schema validation for additional safety."
+        }
+    
+    elif 'secret' in category.lower() or 'hardcoded' in vuln_id or 'cwe-798' in str(cwe).lower():
+        return {
+            "fix_type": "Hardcoded Secrets Removal",
+            "recommendation": "Use environment variables and secret management systems",
+            "code_pattern": "OLD: API_KEY = \"sk_live_abcd1234\"\nNEW: import os\n     API_KEY = os.getenv('API_KEY')\n     if not API_KEY:\n         raise ValueError('API_KEY env var required')",
+            "explanation": "Environment variables keep secrets out of source code. Use secret managers (AWS Secrets Manager, HashiCorp Vault) for production."
+        }
+    
+    elif 'crypto' in category.lower() or 'weak' in vuln_id or 'cwe-327' in str(cwe).lower():
+        return {
+            "fix_type": "Strong Cryptography",
+            "recommendation": "Use modern, secure cryptographic algorithms",
+            "code_pattern": "OLD: import md5\n     hash = md5.new(data).hexdigest()\nNEW: import hashlib\n     hash = hashlib.sha256(data.encode()).hexdigest()\n     # For passwords, use: from werkzeug.security import generate_password_hash",
+            "explanation": "MD5/SHA1 are cryptographically broken. Use SHA-256+ for hashing, bcrypt/scrypt for passwords, AES-256-GCM for encryption."
         }
     
     else:
+        # For unknown vulnerability types, provide general guidance
+        # In production, the ADK agent's LLM would generate contextual fixes here
         return {
-            "fix_type": "General Security Fix",
-            "recommendation": "Review and apply security best practices",
-            "code_pattern": "Follow OWASP guidelines for " + category,
-            "explanation": f"Address {category} by following security best practices and input validation."
+            "fix_type": f"Security Fix: {category}",
+            "recommendation": f"Apply security best practices for {category}",
+            "code_pattern": f"# Review the vulnerable code and apply fixes based on:\n# - OWASP guidelines for {category}\n# - CWE recommendations: {', '.join(cwe) if cwe else 'N/A'}\n# - Input validation and sanitization\n# - Principle of least privilege",
+            "explanation": f"This {category} vulnerability requires context-specific fixes. The ADK agent will analyze the code and generate appropriate security improvements following industry best practices. Common mitigations include input validation, proper authentication/authorization, secure defaults, and defense-in-depth strategies.",
+            "requires_llm": True  # Flag for ADK agent to generate contextual fix
         }
+
 
 
 def generate_remediation_readme(
@@ -343,26 +379,55 @@ Please review the testing checklist in SECURITY_FIXES.md before merging.
 
 # Helper functions
 def _categorize_vulnerability(vuln_id: str) -> str:
-    """Categorize vulnerability by ID."""
+    """Categorize vulnerability by ID or CWE."""
     vuln_id_lower = vuln_id.lower()
     
-    if 'sql' in vuln_id_lower:
+    # Specific patterns
+    if 'sql' in vuln_id_lower or 'cwe-89' in vuln_id_lower:
         return 'SQL Injection'
-    elif 'xss' in vuln_id_lower or 'cross-site' in vuln_id_lower:
+    elif 'xss' in vuln_id_lower or 'cross-site-script' in vuln_id_lower or 'cwe-79' in vuln_id_lower:
         return 'Cross-Site Scripting (XSS)'
-    elif 'command' in vuln_id_lower or 'exec' in vuln_id_lower:
+    elif 'command' in vuln_id_lower or 'exec' in vuln_id_lower or 'cwe-78' in vuln_id_lower:
         return 'Command Injection'
-    elif 'path' in vuln_id_lower or 'traversal' in vuln_id_lower:
+    elif 'path' in vuln_id_lower or 'traversal' in vuln_id_lower or 'cwe-22' in vuln_id_lower:
         return 'Path Traversal'
-    elif 'csrf' in vuln_id_lower:
-        return 'CSRF'
-    elif 'injection' in vuln_id_lower:
-        return 'Injection'
+    elif 'csrf' in vuln_id_lower or 'cwe-352' in vuln_id_lower:
+        return 'Cross-Site Request Forgery (CSRF)'
+    elif 'deserial' in vuln_id_lower or 'pickle' in vuln_id_lower or 'cwe-502' in vuln_id_lower:
+        return 'Insecure Deserialization'
+    elif 'secret' in vuln_id_lower or 'hardcoded' in vuln_id_lower or 'password' in vuln_id_lower or 'cwe-798' in vuln_id_lower:
+        return 'Hardcoded Secrets'
+    elif 'crypto' in vuln_id_lower or 'weak' in vuln_id_lower or 'md5' in vuln_id_lower or 'cwe-327' in vuln_id_lower:
+        return 'Weak Cryptography'
+    elif 'ssrf' in vuln_id_lower or 'cwe-918' in vuln_id_lower:
+        return 'Server-Side Request Forgery (SSRF)'
+    elif 'xxe' in vuln_id_lower or 'xml' in vuln_id_lower or 'cwe-611' in vuln_id_lower:
+        return 'XML External Entity (XXE)'
+    elif 'idor' in vuln_id_lower or 'cwe-639' in vuln_id_lower:
+        return 'Insecure Direct Object Reference (IDOR)'
+    elif 'auth' in vuln_id_lower or 'cwe-287' in vuln_id_lower:
+        return 'Broken Authentication'
+    elif 'session' in vuln_id_lower or 'cwe-384' in vuln_id_lower:
+        return 'Session Management'
+    elif 'race' in vuln_id_lower or 'toctou' in vuln_id_lower or 'cwe-362' in vuln_id_lower:
+        return 'Race Condition'
+    elif 'injection' in vuln_id_lower or 'cwe-74' in vuln_id_lower:
+        return 'Injection Vulnerability'
+    elif 'information' in vuln_id_lower or 'disclosure' in vuln_id_lower or 'cwe-200' in vuln_id_lower:
+        return 'Information Disclosure'
+    elif 'redirect' in vuln_id_lower or 'cwe-601' in vuln_id_lower:
+        return 'Open Redirect'
+    elif 'buffer' in vuln_id_lower or 'overflow' in vuln_id_lower or 'cwe-120' in vuln_id_lower:
+        return 'Buffer Overflow'
+    elif 'dos' in vuln_id_lower or 'denial' in vuln_id_lower or 'cwe-400' in vuln_id_lower:
+        return 'Denial of Service'
     else:
-        return 'Security Vulnerability'
+        # Return cleaned vulnerability ID  
+        return vuln_id.replace('_', ' ').replace('-', ' ').title()
 
 
 def _get_fix_template(vuln_id: str) -> str:
     """Get fix template ID for vulnerability."""
     category = _categorize_vulnerability(vuln_id)
     return category.lower().replace(' ', '_').replace('(', '').replace(')', '')
+
