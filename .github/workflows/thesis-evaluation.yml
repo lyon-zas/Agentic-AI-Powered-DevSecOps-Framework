@@ -415,10 +415,290 @@ jobs:
           path: evaluation/results/
 
   # ============================================================
-  # JOB 3: Generate Combined Thesis Report
+  # JOB 3: Auto-Remediation Agent Evaluation
+  # ============================================================
+  remediation-agent-evaluation:
+    needs: [security-evaluation]
+    if: always() && inputs.run_security_evaluation
+    runs-on: ubuntu-latest
+    outputs:
+      fixes_generated: ${{ steps.evaluate.outputs.fixes_generated }}
+      bleu_score: ${{ steps.evaluate.outputs.bleu_score }}
+      
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install sacrebleu nltk Levenshtein
+      
+      - name: Download Security Results
+        uses: actions/download-artifact@v4
+        with:
+          name: security-evaluation-${{ inputs.dataset }}
+          path: evaluation/results/
+        continue-on-error: true
+      
+      - name: Run Remediation Agent Evaluation
+        id: evaluate
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DATASET: ${{ inputs.dataset }}
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import sys
+          from datetime import datetime
+          from pathlib import Path
+          
+          sys.path.insert(0, '.')
+          
+          print("=" * 60)
+          print("🔧 AUTO-REMEDIATION AGENT EVALUATION")
+          print("=" * 60)
+          
+          try:
+              from agents.remediation_agent.tools import (
+                  analyze_vulnerability,
+                  generate_fix_code,
+                  generate_remediation_readme,
+                  create_remediation_pr
+              )
+              
+              # Load vulnerabilities from security scan
+              dataset = os.environ.get('DATASET', 'unknown')
+              semgrep_file = Path(f"evaluation/results/semgrep_{dataset}.json")
+              
+              if not semgrep_file.exists():
+                  # Try main semgrep results
+                  semgrep_file = Path("evaluation/results/semgrep-results.json")
+              
+              if not semgrep_file.exists():
+                  print("❌ No security scan results found")
+                  sys.exit(1)
+              
+              with open(semgrep_file) as f:
+                  data = json.load(f)
+              
+              vulnerabilities_raw = data.get('results', [])[:10]  # Top 10
+              print(f"✅ Loaded {len(vulnerabilities_raw)} vulnerabilities")
+              
+              # Analyze vulnerabilities
+              analyzed = []
+              for v in vulnerabilities_raw:
+                  a = analyze_vulnerability(v)
+                  analyzed.append(a)
+                  print(f"   • {a['category']} ({a['severity']})")
+              
+              # Generate fixes
+              print(f"\n🔧 Generating LLM-powered fixes...")
+              fixes = []
+              for vuln in analyzed:
+                  fix = generate_fix_code(vuln['file_path'], vuln)
+                  fixes.append(fix)
+              
+              print(f"   Generated {len(fixes)} security fixes")
+              
+              # Generate README
+              print(f"\n📝 Generating SECURITY_FIXES.md...")
+              readme = generate_remediation_readme(analyzed, fixes, "thesis-evaluation")
+              
+              # ============================================================
+              # EVALUATE LLM OUTPUT QUALITY
+              # ============================================================
+              print(f"\n📊 EVALUATING LLM OUTPUT QUALITY...")
+              
+              # Define reference outputs for comparison
+              reference_fixes = {
+                  "command injection": "subprocess.run(['cmd', arg], check=True, capture_output=True)",
+                  "sql injection": "cursor.execute(query, (params,))",
+                  "xss": "html.escape(user_input)",
+                  "path traversal": "os.path.abspath(os.path.normpath(path))",
+              }
+              
+              # Calculate metrics
+              try:
+                  import nltk
+                  from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+                  import Levenshtein
+                  
+                  nltk.download('punkt', quiet=True)
+                  nltk.download('punkt_tab', quiet=True)
+                  
+                  bleu_scores = []
+                  edit_distances = []
+                  token_f1_scores = []
+                  
+                  for fix in fixes:
+                      generated = fix.get('code_pattern', '')
+                      fix_type = fix.get('fix_type', '').lower()
+                      
+                      # Find best matching reference
+                      ref = None
+                      for key, value in reference_fixes.items():
+                          if key in fix_type:
+                              ref = value
+                              break
+                      
+                      if ref and generated:
+                          # BLEU Score (measures n-gram overlap)
+                          try:
+                              from nltk.tokenize import word_tokenize
+                              gen_tokens = word_tokenize(generated.lower())
+                              ref_tokens = word_tokenize(ref.lower())
+                              smoothie = SmoothingFunction().method1
+                              bleu = sentence_bleu([ref_tokens], gen_tokens, smoothing_function=smoothie)
+                              bleu_scores.append(bleu)
+                          except Exception as e:
+                              print(f"   BLEU error: {e}")
+                          
+                          # Edit Distance (Levenshtein)
+                          edit_dist = Levenshtein.distance(generated, ref)
+                          normalized_edit = 1 - (edit_dist / max(len(generated), len(ref), 1))
+                          edit_distances.append(normalized_edit)
+                          
+                          # Token F1 Score
+                          gen_set = set(generated.lower().split())
+                          ref_set = set(ref.lower().split())
+                          common = gen_set & ref_set
+                          if len(gen_set) > 0 and len(ref_set) > 0:
+                              precision = len(common) / len(gen_set)
+                              recall = len(common) / len(ref_set)
+                              f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+                              token_f1_scores.append(f1)
+                  
+                  avg_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
+                  avg_edit = sum(edit_distances) / len(edit_distances) if edit_distances else 0
+                  avg_f1 = sum(token_f1_scores) / len(token_f1_scores) if token_f1_scores else 0
+                  
+                  print(f"\n📈 LLM OUTPUT METRICS:")
+                  print(f"   BLEU Score (avg): {avg_bleu:.4f}")
+                  print(f"   Edit Distance Similarity: {avg_edit:.4f}")
+                  print(f"   Token F1 Score (avg): {avg_f1:.4f}")
+                  
+              except ImportError as e:
+                  print(f"   ⚠️ Metrics calculation skipped: {e}")
+                  avg_bleu = 0
+                  avg_edit = 0
+                  avg_f1 = 0
+              
+              # Evaluate README quality
+              readme_quality = {
+                  "length": len(readme),
+                  "has_executive_summary": "executive summary" in readme.lower(),
+                  "has_testing_checklist": "testing checklist" in readme.lower(),
+                  "has_references": "owasp" in readme.lower() or "cwe" in readme.lower(),
+                  "vulnerability_count": readme.count("### "),
+                  "code_snippets": readme.count("```"),
+              }
+              
+              quality_score = sum([
+                  readme_quality["has_executive_summary"] * 0.2,
+                  readme_quality["has_testing_checklist"] * 0.2,
+                  readme_quality["has_references"] * 0.2,
+                  min(readme_quality["vulnerability_count"] / len(analyzed), 1) * 0.2 if analyzed else 0,
+                  min(readme_quality["code_snippets"] / 10, 1) * 0.2
+              ])
+              
+              print(f"\n📋 README QUALITY:")
+              print(f"   Document length: {readme_quality['length']} chars")
+              print(f"   Has executive summary: {readme_quality['has_executive_summary']}")
+              print(f"   Has testing checklist: {readme_quality['has_testing_checklist']}")
+              print(f"   Has OWASP/CWE references: {readme_quality['has_references']}")
+              print(f"   Code snippets: {readme_quality['code_snippets']}")
+              print(f"   Overall quality score: {quality_score:.2%}")
+              
+              # Test dry-run PR creation
+              print(f"\n🚀 Testing PR creation (dry run)...")
+              pr_result = create_remediation_pr(
+                  repo_name="thesis-evaluation",
+                  vulnerabilities=analyzed,
+                  fixes=fixes,
+                  dry_run=True
+              )
+              
+              print(f"   PR dry run: {'✅ Success' if pr_result.get('success') else '❌ Failed'}")
+              print(f"   Branch: {pr_result.get('branch_name', 'N/A')}")
+              
+              # Save results
+              results = {
+                  "timestamp": datetime.now().isoformat(),
+                  "dataset": dataset,
+                  "vulnerabilities_analyzed": len(analyzed),
+                  "fixes_generated": len(fixes),
+                  "llm_metrics": {
+                      "bleu_score": round(avg_bleu, 4),
+                      "edit_distance_similarity": round(avg_edit, 4),
+                      "token_f1_score": round(avg_f1, 4)
+                  },
+                  "readme_quality": {
+                      "length_chars": readme_quality["length"],
+                      "quality_score": round(quality_score, 4),
+                      "has_executive_summary": readme_quality["has_executive_summary"],
+                      "has_testing_checklist": readme_quality["has_testing_checklist"],
+                      "has_references": readme_quality["has_references"]
+                  },
+                  "pr_creation": {
+                      "dry_run_success": pr_result.get("success", False),
+                      "branch_name": pr_result.get("branch_name", "")
+                  },
+                  "vulnerability_categories": list(set(v['category'] for v in analyzed))
+              }
+              
+              Path("evaluation/results").mkdir(exist_ok=True)
+              with open("evaluation/results/remediation_evaluation.json", "w") as f:
+                  json.dump(results, f, indent=2)
+              
+              # Save generated README for review
+              with open("evaluation/results/generated_SECURITY_FIXES.md", "w") as f:
+                  f.write(readme)
+              
+              print(f"\n✅ Evaluation results saved")
+              
+              # GitHub Actions outputs
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f"fixes_generated={len(fixes)}\n")
+                  f.write(f"bleu_score={avg_bleu:.4f}\n")
+              
+          except Exception as e:
+              print(f"❌ Error: {e}")
+              import traceback
+              traceback.print_exc()
+          
+          print("\n" + "=" * 60)
+          EOF
+        continue-on-error: true
+      
+      - name: Generate Remediation Summary
+        run: |
+          echo "## 🔧 Auto-Remediation Agent Evaluation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Fixes Generated | ${{ steps.evaluate.outputs.fixes_generated }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| BLEU Score | ${{ steps.evaluate.outputs.bleu_score }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See artifacts for detailed LLM output quality metrics." >> $GITHUB_STEP_SUMMARY
+      
+      - name: Upload Remediation Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: remediation-evaluation
+          path: evaluation/results/
+          retention-days: 30
+
+  # ============================================================
+  # JOB 4: Generate Combined Thesis Report
   # ============================================================
   generate-thesis-report:
-    needs: [flaky-test-evaluation, security-evaluation]
+    needs: [flaky-test-evaluation, security-evaluation, remediation-agent-evaluation]
     if: always()
     runs-on: ubuntu-latest
     
@@ -436,6 +716,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: security-evaluation-${{ inputs.dataset }}
+          path: evaluation/results/
+        continue-on-error: true
+      
+      - name: Download Remediation Results
+        uses: actions/download-artifact@v4
+        with:
+          name: remediation-evaluation
           path: evaluation/results/
         continue-on-error: true
       
