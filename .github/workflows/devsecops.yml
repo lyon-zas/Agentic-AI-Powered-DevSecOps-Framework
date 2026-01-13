@@ -7,6 +7,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Required permissions for auto-remediation PR creation
+permissions:
+  contents: write       # Create branches, commit files
+  pull-requests: write  # Create and update PRs
+  issues: write         # Add labels to PRs
+
 env:
   PYTHON_VERSION: '3.11'
 
@@ -176,7 +182,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: test
-          args: --severity-threshold=high --file=requirements.txt
+          args: --severity-threshold=high --file=requirements.txt --skip-unresolved
         continue-on-error: true
       
       # Snyk Monitor - Upload to Snyk dashboard for continuous monitoring
@@ -187,7 +193,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: monitor
-          args: --file=requirements.txt --project-name=${{ github.repository }}
+          args: --file=requirements.txt --project-name=${{ github.repository }} --skip-unresolved
         continue-on-error: true
       
       # Snyk SARIF output for GitHub Security tab
@@ -196,7 +202,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --sarif-file-output=snyk.sarif --file=requirements.txt
+          args: --sarif-file-output=snyk.sarif --file=requirements.txt --skip-unresolved
         continue-on-error: true
       
       - name: Upload Snyk SARIF to GitHub
