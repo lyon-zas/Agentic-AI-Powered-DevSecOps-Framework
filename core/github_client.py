@@ -198,10 +198,22 @@ class GitHubClient:
                 "base_branch": base_branch
             }
         except GithubException as e:
+            error_msg = str(e)
+            error_data = getattr(e, 'data', {})
+            status = getattr(e, 'status', 'unknown')
+            
+            # Provide helpful message for 403 errors
+            if status == 403:
+                error_msg = (
+                    f"403 Forbidden: {error_data.get('message', 'Access denied')}. "
+                    "To fix: Go to Repository Settings → Actions → General → "
+                    "'Workflow permissions' → Enable 'Allow GitHub Actions to create and approve pull requests'"
+                )
+            
             return {
                 "success": False,
-                "error": str(e),
-                "message": f"Failed to create pull request: {e}"
+                "error": f"{status}: {error_data.get('message', error_msg)}",
+                "message": error_msg
             }
     
     def create_branch_and_commit(
