@@ -41,9 +41,42 @@ adk web
 ├── core/                   # Core components
 ├── integrations/           # External tool integrations
 ├── models/                 # ML models (GNN, Bayesian)
+├── evaluation/             # Thesis Evaluation Framework
+│   ├── datasets.py         # Benchmark definitions
+│   ├── metrics.py          # Thesis metrics (DDR, MTTD, BLEU)
+│   └── runner.py           # Evaluation orchestrator
 ├── dashboard/              # Developer Dashboard UI
 └── tests/                  # Test suite
 ```
+
+## 🎓 Thesis Evaluation
+
+This framework includes a comprehensive evaluation module for thesis research.
+
+### Evaluating on GitHub Actions (Recommended)
+
+1. Go to **Actions** → **Thesis Evaluation Pipeline**
+2. Click **Run workflow**
+3. Select a benchmark dataset:
+   - `webgoat`: OWASP WebGoat (Java)
+   - `dvwa`: Damn Vulnerable Web App (PHP)
+   - `juice-shop`: OWASP Juice Shop (JS)
+   - `all`: Run all benchmarks
+4. Download the artifacts for detailed JSON reports.
+
+### Evaluating Locally
+
+To evaluate on a specific dataset (e.g., WebGoat):
+
+```bash
+# Evaluate WebGoat
+python -m evaluation.runner --dataset webgoat
+
+# Evaluate all datasets with specific tools
+python -m evaluation.runner --all --tools semgrep sast_agent
+```
+
+**Note**: Datasets are cloned to `evaluation/datasets/` and are excluded from git.
 
 ## Documentation
 
