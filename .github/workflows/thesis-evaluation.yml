@@ -123,8 +123,9 @@ jobs:
                   test_name = test.get('Test Name', test.get('Fully-Qualified Test Name (packageName.ClassName.methodName)', f'test_{evaluated}'))
                   test_id = f"idoft_{evaluated}"
                   
-                  # Determine ground truth from iDoFT
-                  category = test.get('Category', test.get('Status', '')).lower()
+                  # Determine ground truth from iDoFT (handle NaN/float values)
+                  category_raw = test.get('Category', test.get('Status', ''))
+                  category = str(category_raw).lower() if category_raw and str(category_raw) != 'nan' else ''
                   is_actually_flaky = category in ['od', 'nod', 'id', 'noid', 'flaky', 'victim', 'polluter', 'brittle']
                   
                   if is_actually_flaky:
@@ -155,7 +156,8 @@ jobs:
               # Calculate true/false positives
               for idx, test in enumerate(python_tests[:sample_size]):
                   test_id = f"idoft_{idx}"
-                  category = test.get('Category', test.get('Status', '')).lower()
+                  category_raw = test.get('Category', test.get('Status', ''))
+                  category = str(category_raw).lower() if category_raw and str(category_raw) != 'nan' else ''
                   is_actually_flaky = category in ['od', 'nod', 'id', 'noid', 'flaky', 'victim', 'polluter', 'brittle']
                   
                   if test_id in detected_ids:
@@ -290,8 +292,8 @@ jobs:
           echo "   Scanning path: $DATASET_PATH"
           ls -la $DATASET_PATH || echo "Path not found!"
           
-          # Run Semgrep with verbose output
-          semgrep scan --config auto --json --output evaluation/results/semgrep_${DATASET}.json $DATASET_PATH || {
+          # Run Semgrep with verbose output (--no-git-ignore to scan cloned repos)
+          semgrep scan --config auto --no-git-ignore --json --output evaluation/results/semgrep_${DATASET}.json $DATASET_PATH || {
             echo "Semgrep scan completed with warnings/errors"
           }
           
@@ -327,6 +329,7 @@ jobs:
       - name: Run Framework Evaluation
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DATASET: ${{ inputs.dataset }}
         run: |
           python << 'EOF'
           import json
@@ -349,7 +352,7 @@ jobs:
               )
               from evaluation.datasets import get_dataset, AVAILABLE_DATASETS
               
-              dataset_name = "${{ inputs.dataset }}"
+              dataset_name = os.environ.get('DATASET', 'unknown')
               
               # Load Semgrep results
               semgrep_file = f"evaluation/results/semgrep_{dataset_name}.json"
@@ -391,10 +394,12 @@ jobs:
         continue-on-error: true
       
       - name: Generate Security Report
+        env:
+          DATASET: ${{ inputs.dataset }}
         run: |
           echo "## 🛡️ Security Scanning Evaluation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Dataset:** ${{ inputs.dataset }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dataset:** $DATASET" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Tool | Findings |" >> $GITHUB_STEP_SUMMARY
           echo "|------|----------|" >> $GITHUB_STEP_SUMMARY
@@ -402,9 +407,11 @@ jobs:
           echo "| pip-audit (SCA) | ${{ steps.sca.outputs.findings }} |" >> $GITHUB_STEP_SUMMARY
       
       - name: Upload Security Results
+        env:
+          DATASET: ${{ inputs.dataset }}
         uses: actions/upload-artifact@v4
         with:
-          name: security-evaluation-${{ inputs.dataset }}
+          name: security-evaluation-${{ env.DATASET }}
           path: evaluation/results/
 
   # ============================================================
