@@ -96,29 +96,34 @@ class GitHubClient:
             Dictionary with commit info
         """
         try:
+            from github import InputGitTreeElement
+            
             repo = self.get_repo(repo_name)
             
             # Get the branch reference
             ref = repo.get_git_ref(f"heads/{branch}")
-            tree_sha = repo.get_git_commit(ref.object.sha).tree.sha
+            base_commit = repo.get_git_commit(ref.object.sha)
+            base_tree = base_commit.tree
             
-            # Create blobs for each file
-            blobs = []
+            # Create tree elements using InputGitTreeElement
+            tree_elements = []
             for file_path, content in files.items():
-                blob = repo.create_git_blob(content, "utf-8")
-                blobs.append({
-                    "path": file_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blob.sha
-                })
+                tree_elements.append(InputGitTreeElement(
+                    path=file_path,
+                    mode="100644",
+                    type="blob",
+                    content=content
+                ))
             
-            # Create tree
-            tree = repo.create_git_tree(blobs, base_tree=tree_sha)
+            # Create new tree based on base tree
+            new_tree = repo.create_git_tree(tree_elements, base_tree)
             
             # Create commit
-            parent = repo.get_git_commit(ref.object.sha)
-            commit = repo.create_git_commit(commit_message, tree, [parent])
+            commit = repo.create_git_commit(
+                message=commit_message,
+                tree=new_tree,
+                parents=[base_commit]
+            )
             
             # Update reference
             ref.edit(commit.sha)
@@ -130,6 +135,12 @@ class GitHubClient:
                 "files_committed": list(files.keys())
             }
         except GithubException as e:
+            return {
+                "success": False,
+                "error": str(e.data) if hasattr(e, 'data') else str(e),
+                "message": f"Failed to commit files: {e}"
+            }
+        except Exception as e:
             return {
                 "success": False,
                 "error": str(e),
