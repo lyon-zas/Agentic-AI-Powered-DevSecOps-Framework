@@ -215,10 +215,170 @@ jobs:
           cat pip-audit-results.json | jq -r '.[] | "- \(.name)@\(.version): \(.vulns | length) vulnerabilities"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
         continue-on-error: true
 
+  # Step 4: Auto-Remediation Agent (Creates PRs for detected vulnerabilities)
+  auto-remediation:
+    needs: [security-scan-sast, security-scan-sca]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      pr_created: ${{ steps.remediate.outputs.pr_created }}
+      pr_url: ${{ steps.remediate.outputs.pr_url }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install PyGithub
+      
+      - name: Download Semgrep Results
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep-results
+          path: .
+        continue-on-error: true
+      
+      - name: Run Remediation Agent
+        id: remediate
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          from datetime import datetime
+          
+          sys.path.insert(0, '.')
+          
+          print("=" * 60)
+          print("🔧 AUTO-REMEDIATION AGENT")
+          print("=" * 60)
+          
+          try:
+              from agents.remediation_agent.tools import (
+                  analyze_vulnerability,
+                  generate_fix_code,
+                  generate_remediation_readme,
+                  create_remediation_pr
+              )
+              
+              # Load Semgrep results
+              semgrep_file = Path("semgrep-results.json")
+              if not semgrep_file.exists():
+                  print("❌ No semgrep results found")
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write("pr_created=false\n")
+                  sys.exit(0)
+              
+              with open(semgrep_file) as f:
+                  data = json.load(f)
+              
+              results = data.get('results', [])
+              
+              # Filter for high-severity issues (ERROR)
+              high_severity = [r for r in results 
+                              if r.get('extra', {}).get('severity') == 'ERROR']
+              
+              print(f"📊 Found {len(results)} total issues, {len(high_severity)} high-severity")
+              
+              if len(high_severity) == 0:
+                  print("✅ No high-severity issues to remediate")
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write("pr_created=false\n")
+                  sys.exit(0)
+              
+              # Analyze top 10 high-severity vulnerabilities
+              analyzed = []
+              for v in high_severity[:10]:
+                  a = analyze_vulnerability(v)
+                  analyzed.append(a)
+                  print(f"   • {a['category']} - {a['file_path']}:{a['line_start']}")
+              
+              # Generate fixes
+              print(f"\n🔧 Generating fixes...")
+              fixes = []
+              for vuln in analyzed:
+                  fix = generate_fix_code(vuln['file_path'], vuln)
+                  fixes.append(fix)
+              
+              # Generate README
+              print(f"\n📝 Generating SECURITY_FIXES.md...")
+              repo_name = os.environ.get('GITHUB_REPOSITORY', 'unknown/repo')
+              readme = generate_remediation_readme(analyzed, fixes, repo_name)
+              
+              # Check if GITHUB_TOKEN has write permissions
+              github_token = os.environ.get('GITHUB_TOKEN')
+              if not github_token:
+                  print("⚠️ GITHUB_TOKEN not set - creating dry-run only")
+                  dry_run = True
+              else:
+                  dry_run = False
+              
+              # Create PR
+              print(f"\n🚀 Creating remediation PR...")
+              pr_result = create_remediation_pr(
+                  repo_name=repo_name,
+                  vulnerabilities=analyzed,
+                  fixes=fixes,
+                  base_branch="main",
+                  dry_run=dry_run
+              )
+              
+              if pr_result.get('success'):
+                  if dry_run:
+                      print(f"✅ Dry run successful - would create:")
+                      print(f"   Branch: {pr_result.get('branch_name')}")
+                      print(f"   Vulns: {pr_result.get('vulnerability_count')}")
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write("pr_created=dry_run\n")
+                  else:
+                      print(f"✅ PR created successfully!")
+                      print(f"   URL: {pr_result.get('pr_url')}")
+                      print(f"   Branch: {pr_result.get('branch_name')}")
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write("pr_created=true\n")
+                          f.write(f"pr_url={pr_result.get('pr_url', '')}\n")
+              else:
+                  print(f"❌ PR creation failed: {pr_result.get('error')}")
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write("pr_created=false\n")
+              
+          except Exception as e:
+              print(f"❌ Error: {e}")
+              import traceback
+              traceback.print_exc()
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("pr_created=false\n")
+          
+          print("\n" + "=" * 60)
+          EOF
+        continue-on-error: true
+      
+      - name: Remediation Summary
+        run: |
+          echo "## 🔧 Auto-Remediation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.remediate.outputs.pr_created }}" = "true" ]; then
+            echo "✅ **PR Created**: ${{ steps.remediate.outputs.pr_url }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.remediate.outputs.pr_created }}" = "dry_run" ]; then
+            echo "🔄 **Dry Run**: PR would be created for detected vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No remediation PR needed (no high-severity issues found)" >> $GITHUB_STEP_SUMMARY
+          fi
 
-  # Step 4: Decision Gate
+  # Step 5: Decision Gate
   decision-gate:
-    needs: [test-intelligence, run-tests, security-scan-sast, security-scan-sca]
+    needs: [test-intelligence, run-tests, security-scan-sast, security-scan-sca, auto-remediation]
+    if: always()  # Run even if auto-remediation was skipped (e.g., on PRs)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
