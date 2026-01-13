@@ -224,7 +224,8 @@ jobs:
   # Step 4: Auto-Remediation Agent (Creates PRs for detected vulnerabilities)
   auto-remediation:
     needs: [security-scan-sast, security-scan-sca]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Use always() because security scans use continue-on-error which makes success() return false
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       pr_created: ${{ steps.remediate.outputs.pr_created }}
