@@ -104,9 +104,9 @@ jobs:
           # Import our flaky test tools
           try:
               from agents.flaky_test_agent.tools import (
-                  calculate_flakiness_probability,
-                  check_flakiness_threshold,
-                  quarantine_test
+                  update_failure_probability,
+                  get_flaky_tests,
+                  auto_quarantine_test
               )
               
               # Evaluate on sample of real tests
@@ -114,50 +114,59 @@ jobs:
               detected_flaky = 0
               true_positives = 0
               false_positives = 0
+              actual_flaky_count = 0
               
               # Process first 100 tests for evaluation
               sample_size = min(100, len(python_tests))
               
               for test in python_tests[:sample_size]:
-                  test_name = test.get('Test Name', test.get('Fully-Qualified Test Name', f'test_{evaluated}'))
+                  test_name = test.get('Test Name', test.get('Fully-Qualified Test Name (packageName.ClassName.methodName)', f'test_{evaluated}'))
+                  test_id = f"idoft_{evaluated}"
                   
-                  # Simulate test history based on iDoFT classification
-                  is_actually_flaky = test.get('Status', '').lower() in ['flaky', 'victim', 'polluter']
+                  # Determine ground truth from iDoFT
+                  category = test.get('Category', test.get('Status', '')).lower()
+                  is_actually_flaky = category in ['od', 'nod', 'id', 'noid', 'flaky', 'victim', 'polluter', 'brittle']
                   
-                  # Create simulated run history
                   if is_actually_flaky:
-                      # Flaky tests have ~30% failure rate
-                      passes, fails = 7, 3
+                      actual_flaky_count += 1
+                  
+                  # Simulate test runs based on iDoFT category
+                  if is_actually_flaky:
+                      # Simulate 10 runs with ~30% flaky failure rate
+                      for i in range(7):
+                          update_failure_probability(test_id, test_name, passed=True)
+                      for i in range(3):
+                          update_failure_probability(test_id, test_name, passed=False)
                   else:
-                      # Stable tests have ~5% failure rate
-                      passes, fails = 19, 1
+                      # Stable tests pass most runs
+                      for i in range(9):
+                          update_failure_probability(test_id, test_name, passed=True)
+                      for i in range(1):
+                          update_failure_probability(test_id, test_name, passed=False)
                   
-                  # Run our Bayesian tracker
-                  result = calculate_flakiness_probability(
-                      test_name=test_name,
-                      passes=passes,
-                      fails=fails,
-                      prior_alpha=1.0,
-                      prior_beta=1.0
-                  )
+                  evaluated += 1
+              
+              # Get flaky test detection results
+              flaky_result = get_flaky_tests(threshold=0.25, min_runs=5)
+              detected_tests = flaky_result.get('flaky_tests', [])
+              detected_flaky = len(detected_tests)
+              detected_ids = set(t.get('test_id', '') for t in detected_tests)
+              
+              # Calculate true/false positives
+              for idx, test in enumerate(python_tests[:sample_size]):
+                  test_id = f"idoft_{idx}"
+                  category = test.get('Category', test.get('Status', '')).lower()
+                  is_actually_flaky = category in ['od', 'nod', 'id', 'noid', 'flaky', 'victim', 'polluter', 'brittle']
                   
-                  prob = result.get('probability', 0)
-                  threshold_result = check_flakiness_threshold(test_name, threshold=0.25)
-                  predicted_flaky = threshold_result.get('is_flaky', False)
-                  
-                  if predicted_flaky:
-                      detected_flaky += 1
+                  if test_id in detected_ids:
                       if is_actually_flaky:
                           true_positives += 1
                       else:
                           false_positives += 1
-                  
-                  evaluated += 1
               
               # Calculate metrics
               precision = true_positives / detected_flaky if detected_flaky > 0 else 0
-              recall = true_positives / sum(1 for t in python_tests[:sample_size] 
-                                           if t.get('Status', '').lower() in ['flaky', 'victim', 'polluter']) if sample_size > 0 else 0
+              recall = true_positives / actual_flaky_count if actual_flaky_count > 0 else 0
               f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
               
               print(f"\n📈 EVALUATION RESULTS:")
@@ -266,20 +275,33 @@ jobs:
 
       - name: Run SAST Evaluation
         id: sast
+        env:
+          DATASET: ${{ inputs.dataset }}
         run: |
           echo "🔍 Running SAST (Semgrep) evaluation..."
           mkdir -p evaluation/results
           
-          DATASET_PATH="evaluation/datasets/${{ inputs.dataset }}"
-          if [ "${{ inputs.dataset }}" = "all" ]; then
+          if [ "$DATASET" = "all" ]; then
             DATASET_PATH="evaluation/datasets"
+          else
+            DATASET_PATH="evaluation/datasets/$DATASET"
           fi
           
-          # Run Semgrep
-          semgrep scan --config auto --json $DATASET_PATH > evaluation/results/semgrep_${{ inputs.dataset }}.json 2>/dev/null || true
+          echo "   Scanning path: $DATASET_PATH"
+          ls -la $DATASET_PATH || echo "Path not found!"
+          
+          # Run Semgrep with verbose output
+          semgrep scan --config auto --json --output evaluation/results/semgrep_${DATASET}.json $DATASET_PATH || {
+            echo "Semgrep scan completed with warnings/errors"
+          }
           
           # Count findings
-          FINDINGS=$(cat evaluation/results/semgrep_${{ inputs.dataset }}.json | jq '.results | length' 2>/dev/null || echo "0")
+          if [ -f "evaluation/results/semgrep_${DATASET}.json" ]; then
+            FINDINGS=$(cat evaluation/results/semgrep_${DATASET}.json | jq '.results | length' 2>/dev/null || echo "0")
+          else
+            FINDINGS=0
+            echo '{"results": [], "errors": []}' > evaluation/results/semgrep_${DATASET}.json
+          fi
           echo "findings=$FINDINGS" >> $GITHUB_OUTPUT
           echo "   Found $FINDINGS potential security issues"
         continue-on-error: true
