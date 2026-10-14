@@ -1,0 +1,140 @@
+name: Paper Evaluation (AJERD revision)
+
+# Produces the detection, significance and remediation numbers reported in the
+# AJERD revision from labelled ground truth (evaluation/paper/ground_truth.py).
+# Benchmarks and Semgrep rules are pinned to fixed commits so the run can be
+# repeated. Results are written to the job summary and uploaded as artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Gemini model'
+        required: true
+        default: 'gemini-2.0-flash'
+        type: string
+      run_llm_only_ablation:
+        description: 'Also run the LLM-only ablation (doubles detection API calls)'
+        required: true
+        default: true
+        type: boolean
+      requests_per_minute:
+        description: 'Max Gemini requests per minute (lower it on a free-tier key)'
+        required: true
+        default: '10'
+        type: string
+      max_remediation_cases:
+        description: 'Remediation cases to run (0 = all 90)'
+        required: true
+        default: '0'
+        type: string
+
+env:
+  PYTHON_VERSION: '3.11'
+  DVWA_SHA: 068d974487a297c155c48722f9fcf7180a83adc4
+  WEBGOAT_SHA: e7b131360d74336c0c94ab5c8a21259503f59be8
+  JUICE_SHOP_SHA: e39a3bdb8c61295c31fa4e0a03485e68a8ca12a4
+  SEMGREP_RULES_SHA: 9bbf021d0acffa3095fcffd17b2bc7787eb4796d
+  SEMGREP_VERSION: 1.180.0
+
+jobs:
+  paper-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      EVAL_MODEL: ${{ inputs.model }}
+      LLM_RPM: ${{ inputs.requests_per_minute }}
+      LLM_CACHE_DIR: ${{ github.workspace }}/paper-llm-cache
+      DS: ${{ github.workspace }}/paper-datasets
+      OUT: ${{ github.workspace }}/paper-results
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install "semgrep==${SEMGREP_VERSION}" requests PyYAML PyGithub
+
+      - name: Restore LLM response cache (lets a rerun resume after a quota error)
+        uses: actions/cache/restore@v4
+        with:
+          path: paper-llm-cache
+          key: paper-llm-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            paper-llm-${{ inputs.model }}-
+
+      - name: Clone pinned benchmarks and Semgrep rules
+        run: |
+          fetch() {  # url dir sha
+            git init -q "$2" && git -C "$2" remote add origin "$1"
+            git -C "$2" fetch -q --depth 1 origin "$3" && git -C "$2" checkout -q FETCH_HEAD
+          }
+          mkdir -p "$DS"
+          fetch https://github.com/digininja/DVWA.git "$DS/dvwa" "$DVWA_SHA"
+          fetch https://github.com/WebGoat/WebGoat.git "$DS/webgoat" "$WEBGOAT_SHA"
+          fetch https://github.com/juice-shop/juice-shop.git "$DS/juice-shop" "$JUICE_SHOP_SHA"
+          fetch https://github.com/semgrep/semgrep-rules.git "$DS/semgrep-rules" "$SEMGREP_RULES_SHA"
+          python evaluation/paper/ground_truth.py "$DS"
+
+      - name: Run Semgrep (local rule packs, no registry)
+        working-directory: ${{ env.DS }}
+        run: |
+          mkdir -p "$OUT/semgrep"
+          R=semgrep-rules
+          semgrep scan --metrics off --json --no-git-ignore --config $R/php --config $R/generic \
+            dvwa/vulnerabilities > "$OUT/semgrep/dvwa.json"
+          semgrep scan --metrics off --json --no-git-ignore --config $R/java --config $R/generic \
+            webgoat/src/main > "$OUT/semgrep/webgoat.json"
+          semgrep scan --metrics off --json --no-git-ignore --config $R/typescript --config $R/javascript --config $R/generic \
+            juice-shop/data/static/codefixes > "$OUT/semgrep/juice-shop.json"
+
+      - name: Detection evaluation (Semgrep vs framework, McNemar)
+        run: |
+          MODES=framework
+          if [ "${{ inputs.run_llm_only_ablation }}" = "true" ]; then MODES=framework,llm_only; fi
+          python evaluation/paper/run_detection.py --datasets "$DS" --semgrep "$OUT/semgrep" \
+            --scan-cwd "$DS" --out "$OUT" --modes "$MODES"
+
+      - name: Remediation evaluation (LLM fix, BLEU, MTTR stages)
+        run: |
+          python evaluation/paper/run_remediation_timing.py --juice-shop "$DS/juice-shop" \
+            --semgrep "$OUT/semgrep/juice-shop.json" --scan-cwd "$DS" --out "$OUT" \
+            --max-cases "${{ inputs.max_remediation_cases }}"
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## Paper evaluation"
+            echo
+            echo "Model: \`$EVAL_MODEL\` · Semgrep $(semgrep --version) · runner: $(nproc) vCPU"
+            echo
+            echo "| Source | Commit |"
+            echo "|---|---|"
+            for d in dvwa webgoat juice-shop semgrep-rules; do
+              echo "| $d | \`$(git -C "$DS/$d" rev-parse HEAD 2>/dev/null)\` |"
+            done
+            echo
+            cat "$OUT/detection_results.md" 2>/dev/null || echo "_Detection step did not finish._"
+            echo
+            cat "$OUT/remediation_results.md" 2>/dev/null || echo "_Remediation step did not finish._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== detection_results.json ====="; cat "$OUT/detection_results.json" 2>/dev/null || true
+          echo "===== remediation_results.json ====="; cat "$OUT/remediation_results.json" 2>/dev/null || true
+
+      - name: Save LLM response cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: paper-llm-cache
+          key: paper-llm-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-evaluation-results
+          path: paper-results/
