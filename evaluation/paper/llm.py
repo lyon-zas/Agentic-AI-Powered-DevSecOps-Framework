@@ -57,7 +57,8 @@ def generate_json(prompt, mock=None, max_retries=6):
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(min(120, 5 * 2 ** attempt))
             continue
-        r.raise_for_status()
+        if not r.ok:
+            raise RuntimeError(f"Gemini API {r.status_code} for model '{MODEL}': {r.text[:300]}")
         try:
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             out = _parse(text)

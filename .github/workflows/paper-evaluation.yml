@@ -58,6 +58,19 @@ jobs:
       - name: Install dependencies
         run: pip install "semgrep==${SEMGREP_VERSION}" requests PyYAML PyGithub
 
+      - name: Validate Gemini model and API key
+        run: |
+          code=$(curl -s -o /tmp/model.json -w '%{http_code}' \
+            "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}?key=${GOOGLE_API_KEY}")
+          if [ "$code" != "200" ]; then
+            echo "::error::Model '${EVAL_MODEL}' not available (HTTP $code)"
+            cat /tmp/model.json
+            echo "Models supporting generateContent:"
+            curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${GOOGLE_API_KEY}" \
+              | python -c "import sys,json; [print(' ',m['name']) for m in json.load(sys.stdin).get('models',[]) if 'generateContent' in m.get('supportedGenerationMethods',[])]"
+            exit 1
+          fi
+
       - name: Restore LLM response cache (lets a rerun resume after a quota error)
         uses: actions/cache/restore@v4
         with:
