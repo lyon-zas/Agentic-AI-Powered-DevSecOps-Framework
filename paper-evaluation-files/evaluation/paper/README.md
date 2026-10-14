@@ -7,4 +7,4 @@ Reproduces the detection, significance and remediation figures reported in the p
 - `run_remediation_timing.py`: for each vulnerable Juice Shop snippet, times analysis, LLM fix, README generation and PR (dry run); reports MTTR and BLEU against the `*_correct` fix, plus a no-change BLEU baseline.
 - `llm.py`: Gemini REST client, temperature 0, JSON output, on-disk cache. `LLM_MOCK=1` runs without a key (placeholder answers, marked as mock).
 
-Run it from GitHub: Actions > "Paper Evaluation (AJERD revision)" > Run workflow. Needs the `GOOGLE_API_KEY` repository secret. Results appear on the run's summary page and in the `paper-evaluation-results` artifact.
+Run it from GitHub: Actions > "Paper Evaluation (AJERD revision)" > Run workflow. Needs the `OPENROUTER_API_KEY` (provider `openrouter`) or `GOOGLE_API_KEY` (provider `gemini`) repository secret. Results appear on the run's summary page and in the `paper-evaluation-results` artifact.

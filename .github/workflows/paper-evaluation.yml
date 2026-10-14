@@ -8,10 +8,16 @@ name: Paper Evaluation (AJERD revision)
 on:
   workflow_dispatch:
     inputs:
-      model:
-        description: 'Gemini model'
+      provider:
+        description: 'LLM provider: gemini or openrouter'
         required: true
-        default: 'gemini-3.8-flash'
+        default: 'openrouter'
+        type: choice
+        options: [openrouter, gemini]
+      model:
+        description: 'Model id (gemini: gemini-3.8-flash; openrouter: e.g. google/gemini-2.5-flash or openai/gpt-4o-mini)'
+        required: true
+        default: 'google/gemini-2.5-flash'
         type: string
       run_llm_only_ablation:
         description: 'Also run the LLM-only ablation (doubles detection API calls)'
@@ -19,7 +25,7 @@ on:
         default: true
         type: boolean
       requests_per_minute:
-        description: 'Max Gemini requests per minute (lower it on a free-tier key)'
+        description: 'Max LLM requests per minute'
         required: true
         default: '10'
         type: string
@@ -42,7 +48,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
+      LLM_PROVIDER: ${{ inputs.provider }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       EVAL_MODEL: ${{ inputs.model }}
       LLM_RPM: ${{ inputs.requests_per_minute }}
       LLM_CACHE_DIR: ${{ github.workspace }}/paper-llm-cache
@@ -58,28 +66,35 @@ jobs:
       - name: Install dependencies
         run: pip install "semgrep==${SEMGREP_VERSION}" requests PyYAML PyGithub
 
-      - name: Validate Gemini model and API key
+      - name: Validate LLM provider, model and API key
         run: |
-          # A real generateContent call: the metadata endpoint still returns 200 for retired models.
-          for i in 1 2 3 4 5 6; do  # retry transient 429/5xx like llm.py does
-            code=$(curl -s -o /tmp/model.json -w '%{http_code}' -X POST               -H 'Content-Type: application/json'               -d '{"contents":[{"parts":[{"text":"Reply with OK"}]}]}'               "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
-            case "$code" in 429|5??) sleep $((i * 20));; *) break;; esac
-          done
-          if [ "$code" != "200" ]; then
-            echo "::error::Model '${EVAL_MODEL}' failed generateContent (HTTP $code)"
-            cat /tmp/model.json
-            echo "Models supporting generateContent:"
-            curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${GOOGLE_API_KEY}"               | python -c "import sys,json; [print(' ',m['name']) for m in json.load(sys.stdin).get('models',[]) if 'generateContent' in m.get('supportedGenerationMethods',[])]"
-            exit 1
+          if [ "$LLM_PROVIDER" = "openrouter" ]; then
+            # Zero-cost: validates the key and lists nothing that spends credits
+            code=$(curl -s -o /tmp/model.json -w '%{http_code}'               -H "Authorization: Bearer ${OPENROUTER_API_KEY}" https://openrouter.ai/api/v1/auth/key)
+            if [ "$code" != "200" ]; then
+              echo "::error::OpenRouter key check failed (HTTP $code)"; cat /tmp/model.json; exit 1
+            fi
+            echo "OpenRouter key OK; model: ${EVAL_MODEL}"
+          else
+            # A real generateContent call: the metadata endpoint still returns 200 for retired models.
+            for i in 1 2 3 4 5 6; do  # retry transient 429/5xx like llm.py does
+              code=$(curl -s -o /tmp/model.json -w '%{http_code}' -X POST                 -H 'Content-Type: application/json'                 -d '{"contents":[{"parts":[{"text":"Reply with OK"}]}]}'                 "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
+              case "$code" in 429|5??) sleep $((i * 20));; *) break;; esac
+            done
+            if [ "$code" != "200" ]; then
+              echo "::error::Model '${EVAL_MODEL}' failed generateContent (HTTP $code)"
+              cat /tmp/model.json
+              exit 1
+            fi
           fi
 
       - name: Restore LLM response cache (lets a rerun resume after a quota error)
         uses: actions/cache/restore@v4
         with:
           path: paper-llm-cache
-          key: paper-llm-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: paper-llm-${{ inputs.provider }}-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            paper-llm-${{ inputs.model }}-
+            paper-llm-${{ inputs.provider }}-${{ inputs.model }}-
 
       - name: Clone pinned benchmarks and Semgrep rules
         run: |
@@ -145,7 +160,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: paper-llm-cache
-          key: paper-llm-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: paper-llm-${{ inputs.provider }}-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload results
         if: always()

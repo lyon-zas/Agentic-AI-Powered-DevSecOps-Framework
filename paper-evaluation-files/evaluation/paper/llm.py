@@ -1,8 +1,10 @@
 """
-Minimal Gemini client for the paper evaluation.
+Minimal LLM client for the paper evaluation (Gemini or OpenRouter).
 
-Calls the Gemini REST API directly (temperature 0, JSON output) so the
-evaluation does not depend on the ADK runtime. Responses are cached on disk
+Calls the provider REST API directly (temperature 0, JSON output) so the
+evaluation does not depend on the ADK runtime. Select the backend with
+LLM_PROVIDER=gemini (GOOGLE_API_KEY) or LLM_PROVIDER=openrouter
+(OPENROUTER_API_KEY). Responses are cached on disk
 by a hash of (model, prompt), so a rerun after a rate-limit failure resumes
 instead of starting over.
 
@@ -19,7 +21,8 @@ from pathlib import Path
 
 import requests
 
-MODEL = os.getenv("EVAL_MODEL", "gemini-2.0-flash")
+PROVIDER = os.getenv("LLM_PROVIDER", "gemini")  # "gemini" or "openrouter"
+MODEL = os.getenv("EVAL_MODEL", "gemini-3.8-flash")
 MOCK = os.getenv("LLM_MOCK") == "1"
 CACHE = Path(os.getenv("LLM_CACHE_DIR", "evaluation/paper/.llm_cache"))
 RPM = float(os.getenv("LLM_RPM", "10"))
@@ -40,32 +43,47 @@ def generate_json(prompt, mock=None, max_retries=6):
         d = json.loads(f.read_text())
         return d["response"], d["seconds"], True
 
-    api_key = os.environ["GOOGLE_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
-    }
+    if PROVIDER == "openrouter":
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        kwargs = {"headers": {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}}
+        body = {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+    else:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+        kwargs = {"params": {"key": os.environ["GOOGLE_API_KEY"]}}
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+        }
     for attempt in range(max_retries):
         wait = 60.0 / RPM - (time.time() - _last[0])
         if wait > 0:
             time.sleep(wait)
         _last[0] = time.time()
         t0 = time.perf_counter()
-        r = requests.post(url, params={"key": api_key}, json=body, timeout=180)
+        r = requests.post(url, json=body, timeout=180, **kwargs)
         dt = time.perf_counter() - t0
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(min(120, 5 * 2 ** attempt))
             continue
-        r.raise_for_status()
+        if not r.ok:
+            raise RuntimeError(f"{PROVIDER} API {r.status_code} for model '{MODEL}': {r.text[:300]}")
         try:
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            j = r.json()
+            if PROVIDER == "openrouter":
+                text = j["choices"][0]["message"]["content"]
+            else:
+                text = j["candidates"][0]["content"]["parts"][0]["text"]
             out = _parse(text)
         except (KeyError, IndexError, ValueError):
             out = {"_unparsed": r.text[:2000]}
         f.write_text(json.dumps({"model": MODEL, "seconds": dt, "response": out}))
         return out, dt, False
-    raise RuntimeError(f"Gemini request failed after {max_retries} attempts: {r.status_code} {r.text[:300]}")
+    raise RuntimeError(f"{PROVIDER} request failed after {max_retries} attempts: {r.status_code} {r.text[:300]}")
 
 
 def _parse(text):
