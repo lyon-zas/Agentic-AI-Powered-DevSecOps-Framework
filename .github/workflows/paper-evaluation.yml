@@ -61,7 +61,10 @@ jobs:
       - name: Validate Gemini model and API key
         run: |
           # A real generateContent call: the metadata endpoint still returns 200 for retired models.
-          code=$(curl -s -o /tmp/model.json -w '%{http_code}' -X POST             -H 'Content-Type: application/json'             -d '{"contents":[{"parts":[{"text":"Reply with OK"}]}]}'             "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
+          for i in 1 2 3 4 5 6; do  # retry transient 429/5xx like llm.py does
+            code=$(curl -s -o /tmp/model.json -w '%{http_code}' -X POST               -H 'Content-Type: application/json'               -d '{"contents":[{"parts":[{"text":"Reply with OK"}]}]}'               "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
+            case "$code" in 429|5??) sleep $((i * 20));; *) break;; esac
+          done
           if [ "$code" != "200" ]; then
             echo "::error::Model '${EVAL_MODEL}' failed generateContent (HTTP $code)"
             cat /tmp/model.json
