@@ -11,7 +11,7 @@ on:
       model:
         description: 'Gemini model'
         required: true
-        default: 'gemini-2.0-flash'
+        default: 'gemini-3.8-flash'
         type: string
       run_llm_only_ablation:
         description: 'Also run the LLM-only ablation (doubles detection API calls)'
@@ -60,14 +60,13 @@ jobs:
 
       - name: Validate Gemini model and API key
         run: |
-          code=$(curl -s -o /tmp/model.json -w '%{http_code}' \
-            "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}?key=${GOOGLE_API_KEY}")
+          # A real generateContent call: the metadata endpoint still returns 200 for retired models.
+          code=$(curl -s -o /tmp/model.json -w '%{http_code}' -X POST             -H 'Content-Type: application/json'             -d '{"contents":[{"parts":[{"text":"Reply with OK"}]}]}'             "https://generativelanguage.googleapis.com/v1beta/models/${EVAL_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
           if [ "$code" != "200" ]; then
-            echo "::error::Model '${EVAL_MODEL}' not available (HTTP $code)"
+            echo "::error::Model '${EVAL_MODEL}' failed generateContent (HTTP $code)"
             cat /tmp/model.json
             echo "Models supporting generateContent:"
-            curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${GOOGLE_API_KEY}" \
-              | python -c "import sys,json; [print(' ',m['name']) for m in json.load(sys.stdin).get('models',[]) if 'generateContent' in m.get('supportedGenerationMethods',[])]"
+            curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${GOOGLE_API_KEY}"               | python -c "import sys,json; [print(' ',m['name']) for m in json.load(sys.stdin).get('models',[]) if 'generateContent' in m.get('supportedGenerationMethods',[])]"
             exit 1
           fi
 
